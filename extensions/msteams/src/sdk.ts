@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
+import type { Client as MSTeamsHttpClient } from "@microsoft/teams.common/http";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -33,7 +34,9 @@ type TeamsSdkModules = {
   ExpressAdapter: MSTeamsExpressAdapterCtor;
 };
 
-type MSTeamsHttpClientCtor = new (options?: { headers?: Record<string, string> }) => unknown;
+type MSTeamsHttpClientCtor = new (options?: {
+  headers?: Record<string, string>;
+}) => MSTeamsHttpClient;
 type TeamsCommonHttpModule = {
   Client: MSTeamsHttpClientCtor;
 };
