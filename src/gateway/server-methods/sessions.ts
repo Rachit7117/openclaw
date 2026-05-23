@@ -108,6 +108,7 @@ import {
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
+  type GatewaySessionRow,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -307,6 +308,39 @@ function projectSessionStoreWithActiveRuns(params: {
     projectedStore[key] = projectSessionRowWithActiveRun(entry, activeRun);
   }
   return projectedStore ?? params.store;
+}
+
+function activeRunProjectionChanged(params: {
+  projectedActiveRuns: Map<string, ChatAbortControllerEntry>;
+  currentActiveRuns: Map<string, ChatAbortControllerEntry>;
+}): boolean {
+  if (params.projectedActiveRuns.size !== params.currentActiveRuns.size) {
+    return true;
+  }
+  for (const [sessionKey, projectedRun] of params.projectedActiveRuns) {
+    const currentRun = params.currentActiveRuns.get(sessionKey);
+    if (
+      !currentRun ||
+      currentRun.sessionId !== projectedRun.sessionId ||
+      currentRun.startedAtMs !== projectedRun.startedAtMs
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function projectSessionRowsWithActiveRuns(params: {
+  sessions: GatewaySessionRow[];
+  activeSessionRuns: Map<string, ChatAbortControllerEntry>;
+}): GatewaySessionRow[] {
+  return params.sessions.map((session) => {
+    const activeRun = params.activeSessionRuns.get(session.key);
+    if (!activeRun) {
+      return { ...session, hasActiveRun: false };
+    }
+    return projectSessionRowWithActiveRun(session, activeRun);
+  });
 }
 
 function emitSessionsChanged(
@@ -1048,7 +1082,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             phase: "sessions.list",
           },
         );
-        const result = await measureDiagnosticsTimelineSpan(
+        let result = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.rows",
           () =>
             listSessionsFromStoreAsync({
@@ -1066,16 +1100,62 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        const currentActiveSessionRuns = collectTrackedActiveSessionRunsByKey(context);
+        if (
+          activeRunProjectionChanged({
+            projectedActiveRuns: activeSessionRuns,
+            currentActiveRuns: currentActiveSessionRuns,
+          })
+        ) {
+          const { storePath: refreshedStorePath, store: refreshedStore } =
+            measureDiagnosticsTimelineSpanSync(
+              "gateway.sessions.list.store_reload",
+              () =>
+                loadCombinedSessionStoreForGateway(cfg, {
+                  agentId: p.agentId,
+                }),
+              {
+                config: cfg,
+                phase: "sessions.list",
+                attributes: {
+                  agentId: p.agentId ?? null,
+                  configuredAgentsOnly,
+                },
+              },
+            );
+          const refreshedListStore = configuredAgentsOnly
+            ? filterSessionStoreToConfiguredAgents(cfg, refreshedStore)
+            : refreshedStore;
+          const refreshedActiveProjectedListStore = projectSessionStoreWithActiveRuns({
+            store: refreshedListStore,
+            activeSessionRuns: currentActiveSessionRuns,
+          });
+          result = await measureDiagnosticsTimelineSpan(
+            "gateway.sessions.list.rows_reload",
+            () =>
+              listSessionsFromStoreAsync({
+                cfg,
+                storePath: refreshedStorePath,
+                store: refreshedActiveProjectedListStore,
+                modelCatalog,
+                opts: p,
+              }),
+            {
+              config: cfg,
+              phase: "sessions.list",
+              attributes: {
+                storeEntries: Object.keys(refreshedActiveProjectedListStore).length,
+              },
+            },
+          );
+        }
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
-          () => {
-            return result.sessions.map((session) => {
-              const activeRun = activeSessionRuns.get(session.key);
-              return activeRun
-                ? projectSessionRowWithActiveRun(session, activeRun)
-                : Object.assign({}, session, { hasActiveRun: false });
-            });
-          },
+          () =>
+            projectSessionRowsWithActiveRuns({
+              sessions: result.sessions,
+              activeSessionRuns: currentActiveSessionRuns,
+            }),
           {
             config: cfg,
             phase: "sessions.list",

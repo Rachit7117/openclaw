@@ -345,6 +345,101 @@ test("sessions.list sorts active runs before applying the response limit", async
   });
 });
 
+test("sessions.list refreshes rows when a projected active run finishes before response", async () => {
+  await createSessionStoreDir();
+  const activeStartedAtMs = Date.now();
+  const finishedAtMs = activeStartedAtMs + 1_000;
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        updatedAt: activeStartedAtMs - 10_000,
+        status: "done",
+        startedAt: activeStartedAtMs - 20_000,
+        endedAt: activeStartedAtMs - 10_000,
+        runtimeMs: 10_000,
+        abortedLastRun: false,
+      }),
+      "newer-inactive": sessionStoreEntry("sess-newer-inactive", {
+        updatedAt: activeStartedAtMs - 500,
+      }),
+    },
+  });
+
+  const activeRuns = new Map([
+    [
+      "run-active",
+      createActiveRun({
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        startedAtMs: activeStartedAtMs,
+      }),
+    ],
+  ]);
+  const deferredCatalog = createDeferred<[]>();
+  const loadGatewayModelCatalog = vi.fn(() => deferredCatalog.promise);
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+
+  const request = sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-active-run-finished",
+      method: "sessions.list",
+      params: { limit: 1 },
+    },
+    params: { limit: 1 },
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog,
+      chatAbortControllers: activeRuns,
+      logGateway: {
+        debug: vi.fn(),
+      },
+    } as never,
+  });
+
+  await Promise.resolve();
+  expect(loadGatewayModelCatalog).toHaveBeenCalled();
+  activeRuns.delete("run-active");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        updatedAt: finishedAtMs,
+        status: "done",
+        startedAt: activeStartedAtMs,
+        endedAt: finishedAtMs,
+        runtimeMs: 1_000,
+        abortedLastRun: false,
+      }),
+      "newer-inactive": sessionStoreEntry("sess-newer-inactive", {
+        updatedAt: activeStartedAtMs - 500,
+      }),
+    },
+  });
+  deferredCatalog.resolve([]);
+
+  await request;
+
+  const payload = expectRespondPayload(respond);
+  const sessions = requireArray(payload.sessions, "response sessions");
+  expect(sessions).toHaveLength(1);
+  const session = requireRecord(sessions[0], "limited session");
+  expectFields(session, {
+    key: "agent:main:main",
+    hasActiveRun: false,
+    status: "done",
+    startedAt: activeStartedAtMs,
+    updatedAt: finishedAtMs,
+    endedAt: finishedAtMs,
+    runtimeMs: 1_000,
+    abortedLastRun: false,
+  });
+});
+
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { dir } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
