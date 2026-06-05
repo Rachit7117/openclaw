@@ -26,7 +26,7 @@ function createHost() {
     chatMessages: [],
     chatToolMessages: [],
     chatStream: null,
-    chatRunId: null,
+    chatRunId: null as string | null,
     chatRunLastActivityAt: null as number | null,
     chatRunWatchdogTimer: null as ReturnType<typeof globalThis.setTimeout> | number | null,
     chatRunWatchdogProbeInFlight: false,

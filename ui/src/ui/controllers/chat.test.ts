@@ -2164,6 +2164,7 @@ describe("chat run watchdog", () => {
       toolStreamOrder: [],
       chatToolMessages: [],
       chatStreamSegments: [],
+      updateComplete: Promise.resolve(),
       basePath: "",
       settings: {
         gatewayUrl: "ws://gateway.test/control",
@@ -2212,7 +2213,7 @@ describe("chat run watchdog", () => {
       });
       expect(request).toHaveBeenCalledWith(
         "chat.history",
-        expect.objectContaining({ sessionKey: "main", limit: 200 }),
+        expect.objectContaining({ sessionKey: "main", limit: 100 }),
       );
       expect(request).toHaveBeenCalledWith(
         "chat.send",
